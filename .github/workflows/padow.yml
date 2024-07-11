@@ -1,0 +1,177 @@
+name: building
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      repository:
+        default: padowyt2/desktop
+        required: false
+        type: string
+      environment:
+        type: string
+        required: true
+
+env:
+  NODE_VERSION: 20.11.1
+
+jobs:
+  build:
+    name: ${{ matrix.friendlyName }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, windows-2019]
+        arch: [x64, arm64]
+        include:
+          - os: macos-13
+            friendlyName: macOS
+          - os: windows-2019
+            friendlyName: Windows
+    timeout-minutes: 60
+    env:
+      RELEASE_CHANNEL: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+      - name: Install and build dependencies
+        run: yarn
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          TARGET_ARCH: ${{ matrix.arch }}
+      - name: Build production app
+        run: yarn build:prod
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          TARGET_ARCH: ${{ matrix.arch }}
+      - name: Package production app
+        run: yarn package
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{matrix.friendlyName}}-${{matrix.arch}}
+          path: |
+            dist/GitHub Desktop-${{matrix.arch}}.zip
+            dist/GitHubDesktop-*.nupkg
+            dist/GitHubDesktopSetup-${{matrix.arch}}.exe
+            dist/GitHubDesktopSetup-${{matrix.arch}}.msi
+            dist/bundle-size.json
+          if-no-files-found: error
+  arm64:
+    name: Ubuntu arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          submodules: recursive
+      - name: Package and test application in container
+        uses: shiftkey/desktop-ubuntu-arm64-packaging@d5a0346959c7d553eb8dbe2828e7fe2e10147160
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-arm64-artifacts
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.sha256
+          retention-days: 5
+          if-no-files-found: error
+  arm:
+    name: Ubuntu arm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          submodules: recursive
+      - name: Package and test application in container
+        uses: shiftkey/desktop-ubuntu-arm-packaging@48215eee48762e1c919309b2915b8ceb478e5642
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-arm-artifacts
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.sha256
+          retention-days: 5
+          if-no-files-found: error
+  amd64:
+    name: Ubuntu x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          submodules: recursive
+      - name: Package and test application in container
+        uses: shiftkey/desktop-ubuntu-amd64-packaging@33a71a92b43e54694726382d1e4029a91fe894cc
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-amd64-artifacts
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.sha256
+          retention-days: 5
+          if-no-files-found: error
+
+  publish:
+    name: Create GitHub release
+    needs: [arm64, arm, amd64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 18.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.14.0
+          cache: yarn
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: "./artifacts"
+
+      - name: Display structure of downloaded files
+        run: ls -R
+        working-directory: "./artifacts"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: GitHub Desktop
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.msi
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.sha256
+          draft: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
